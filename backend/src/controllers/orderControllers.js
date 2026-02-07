@@ -230,7 +230,11 @@ export const cancelOrder = async (req, res) => {
     }
 
     // Không cho phép hủy đơn đã bị hủy hoặc đã giao hàng
-    if (order.status === "cancelled" || order.status === "shipped") {
+    if (
+      order.status === "cancelled" ||
+      order.status === "shipped" ||
+      order.status === "shipping"
+    ) {
       return res.status(400).json({
         success: false,
         message: `Cannot cancel order with status: ${order.status}`,

@@ -61,6 +61,14 @@ const ensureVnpayConfig = () => {
   return null;
 };
 
+const isShippingStatus = (status) =>
+  status === "shipping" || status === "shipped";
+
+const shouldSetPendingStatus = (status) =>
+  !isShippingStatus(status) &&
+  status !== "completed" &&
+  status !== "cancelled";
+
 export const createVnpayPaymentUrl = async (req, res) => {
   try {
     const configError = ensureVnpayConfig();
@@ -80,7 +88,11 @@ export const createVnpayPaymentUrl = async (req, res) => {
     if (order.user?.toString() !== req.userId) {
       return res.status(403).json({ message: "Forbidden" });
     }
-    if (order.status === "paid") {
+    const existingPayment = await Payment.findOne({ order: order._id });
+    const paymentAlreadyCompleted =
+      existingPayment?.paymentStatus === "completed" ||
+      existingPayment?.paymentStatus === "paid";
+    if (order.status === "paid" || order.status === "completed" || paymentAlreadyCompleted) {
       return res.status(400).json({ message: "Order already paid" });
     }
 
@@ -100,7 +112,6 @@ export const createVnpayPaymentUrl = async (req, res) => {
       ...(bankCode ? { vnp_BankCode: bankCode } : {}),
     });
 
-    const existingPayment = await Payment.findOne({ order: order._id });
     if (existingPayment) {
       existingPayment.paymentMethod = "vnpay";
       existingPayment.paymentStatus = "pending";
@@ -131,37 +142,46 @@ export const handleVnpayReturn = async (req, res) => {
       try {
         const order = await Order.findById(verify.vnp_TxnRef);
 
-        if (order && order.status !== "completed" && order.status !== "paid") {
-          order.status = "completed";
-          await order.save();
+        if (order) {
+          const existingPayment = await Payment.findOne({ order: order._id });
+          const paymentAlreadyCompleted =
+            existingPayment?.paymentStatus === "completed" ||
+            existingPayment?.paymentStatus === "paid";
 
-          await Payment.findOneAndUpdate(
-            { order: order._id },
-            {
-              paymentMethod: "vnpay",
-              paymentStatus: "completed",
-              transactionCode: verify.vnp_TransactionNo,
-              paidAt: new Date(),
-            },
-            { upsert: true },
-          );
+          if (!paymentAlreadyCompleted) {
+            if (shouldSetPendingStatus(order.status)) {
+              order.status = "pending";
+              await order.save();
+            }
 
-          // Trừ stock sản phẩm
-          const orderItems = await OrderItem.find({ order: order._id });
-          for (const item of orderItems) {
-            await Product.findByIdAndUpdate(item.product, {
-              $inc: { stock: -item.quantity },
-            });
+            await Payment.findOneAndUpdate(
+              { order: order._id },
+              {
+                paymentMethod: "vnpay",
+                paymentStatus: "completed",
+                transactionCode: verify.vnp_TransactionNo,
+                paidAt: new Date(),
+              },
+              { upsert: true },
+            );
+
+            // Trừ stock sản phẩm
+            const orderItems = await OrderItem.find({ order: order._id });
+            for (const item of orderItems) {
+              await Product.findByIdAndUpdate(item.product, {
+                $inc: { stock: -item.quantity },
+              });
+            }
+
+            // Xóa giỏ hàng của user
+            const cart = await Cart.findOne({ user: order.user });
+            if (cart) {
+              await CartItem.deleteMany({ cart: cart._id });
+            }
+            sendOrderConfirmationEmail(order._id.toString()).catch((e) =>
+              console.error("[VNPay Return] Lỗi gửi email:", e.message)
+            );
           }
-
-          // Xóa giỏ hàng của user
-          const cart = await Cart.findOne({ user: order.user });
-          if (cart) {
-            await CartItem.deleteMany({ cart: cart._id });
-          }
-          sendOrderConfirmationEmail(order._id.toString()).catch((e) =>
-            console.error("[VNPay Return] Lỗi gửi email:", e.message)
-          );
         }
       } catch (dbError) {
         console.error("Error updating order in handleVnpayReturn:", dbError);
@@ -205,12 +225,18 @@ export const handleVnpayIpn = async (req, res) => {
       return res.json(IpnInvalidAmount);
     }
 
-    if (order.status === "paid" || order.status === "completed") {
+    const existingPayment = await Payment.findOne({ order: order._id });
+    const paymentAlreadyCompleted =
+      existingPayment?.paymentStatus === "completed" ||
+      existingPayment?.paymentStatus === "paid";
+    if (paymentAlreadyCompleted || order.status === "paid" || order.status === "completed") {
       return res.json(InpOrderAlreadyConfirmed);
     }
 
-    order.status = "completed";
-    await order.save();
+    if (shouldSetPendingStatus(order.status)) {
+      order.status = "pending";
+      await order.save();
+    }
 
     await Payment.findOneAndUpdate(
       { order: order._id },
@@ -244,3 +270,4 @@ export const handleVnpayIpn = async (req, res) => {
     return res.json(IpnUnknownError);
   }
 };
+

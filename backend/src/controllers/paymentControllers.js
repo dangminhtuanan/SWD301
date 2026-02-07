@@ -44,9 +44,18 @@ export const createPayment = async (req, res) => {
         const payment = new Payment({ order, paymentMethod, paymentStatus, transactionCode, paidAt });
         const newPayment = await payment.save();
 
-        if (paymentStatus === 'paid') {
-            orderDoc.status = 'paid';
-            await orderDoc.save();
+        const isPaid = paymentStatus === "paid" || paymentStatus === "completed";
+        if (isPaid) {
+            const isShipping =
+                orderDoc.status === "shipping" || orderDoc.status === "shipped";
+            if (
+                !isShipping &&
+                orderDoc.status !== "completed" &&
+                orderDoc.status !== "cancelled"
+            ) {
+                orderDoc.status = "pending";
+                await orderDoc.save();
+            }
         }
 
         res.status(201).json(newPayment);
@@ -71,11 +80,21 @@ export const updatePayment = async (req, res) => {
 
         const updatedPayment = await payment.save();
 
-        if (paymentStatus === 'paid') {
+        const isPaid = paymentStatus === "paid" || paymentStatus === "completed";
+        if (isPaid) {
             const orderDoc = await Order.findById(payment.order);
             if (orderDoc) {
-                orderDoc.status = 'paid';
-                await orderDoc.save();
+                const isShipping =
+                    orderDoc.status === "shipping" ||
+                    orderDoc.status === "shipped";
+                if (
+                    !isShipping &&
+                    orderDoc.status !== "completed" &&
+                    orderDoc.status !== "cancelled"
+                ) {
+                    orderDoc.status = "pending";
+                    await orderDoc.save();
+                }
             }
         }
 

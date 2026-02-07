@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ShoppingBag } from 'lucide-react';
-import { productAPI, reviewAPI } from '../../src/services/api';
+import { productAPI, reviewAPI, orderAPI } from '../../src/services/api';
 import { useCart } from '../../src/context/CartContext';
 import { useAuth } from '../../src/context/AuthContext';
 import { toast } from 'sonner';
@@ -23,11 +23,57 @@ export default function Detailcard() {
     const [rating, setRating] = useState(0);
     const [comment, setComment] = useState('');
     const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+    const [canReview, setCanReview] = useState(false);
+    const [checkingReviewEligibility, setCheckingReviewEligibility] = useState(false);
 
     useEffect(() => {
         fetchProduct();
         fetchReviews();
     }, [id]);
+
+    useEffect(() => {
+        const checkReviewEligibility = async () => {
+            if (!isAuthenticated) {
+                setCanReview(false);
+                return;
+            }
+
+            try {
+                setCheckingReviewEligibility(true);
+                const data = await orderAPI.getMyOrders();
+                const orders = data?.data || data?.orders || data || [];
+                const completedOrders = orders.filter((order) => order.status === 'completed');
+
+                if (!completedOrders.length) {
+                    setCanReview(false);
+                    return;
+                }
+
+                const orderDetails = await Promise.all(
+                    completedOrders.map((order) =>
+                        orderAPI.getById(order._id).catch(() => null),
+                    ),
+                );
+
+                const hasProduct = orderDetails.some((detail) => {
+                    const items = detail?.items || [];
+                    return items.some((item) => {
+                        const productId = item?.product?._id || item?.product;
+                        return productId && String(productId) === String(id);
+                    });
+                });
+
+                setCanReview(hasProduct);
+            } catch (error) {
+                console.error('Error checking review eligibility:', error);
+                setCanReview(false);
+            } finally {
+                setCheckingReviewEligibility(false);
+            }
+        };
+
+        checkReviewEligibility();
+    }, [id, isAuthenticated]);
 
     const fetchProduct = async () => {
         try {
@@ -344,48 +390,66 @@ export default function Detailcard() {
                             <h3 className="text-lg font-semibold text-gray-900 mb-4">
                                 {myReview ? 'Cập nhật đánh giá' : 'Viết đánh giá'}
                             </h3>
-                            <div className="flex items-center gap-2 mb-4">
-                                {[...Array(5)].map((_, index) => {
-                                    const value = index + 1;
-                                    return (
-                                        <button
-                                            key={value}
-                                            type="button"
-                                            onClick={() => setRating(value)}
-                                            className="focus:outline-none"
-                                            aria-label={`${value} stars`}
-                                        >
-                                            <svg
-                                                className={`w-6 h-6 ${value <= rating
-                                                    ? 'text-yellow-400 fill-current'
-                                                    : 'text-gray-300 fill-current'
-                                                    }`}
-                                                viewBox="0 0 20 20"
-                                            >
-                                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                                            </svg>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            <textarea
-                                value={comment}
-                                onChange={(e) => setComment(e.target.value)}
-                                placeholder="Chia sẻ cảm nhận về sản phẩm..."
-                                rows={4}
-                                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black/20"
-                            />
-                            <button
-                                onClick={handleSubmitReview}
-                                disabled={isSubmittingReview}
-                                className="mt-4 w-full rounded-lg bg-black py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:bg-gray-400"
-                            >
-                                {isSubmittingReview ? 'Đang gửi...' : 'Gửi đánh giá'}
-                            </button>
-                            {!isAuthenticated && (
-                                <p className="mt-3 text-xs text-gray-500">
-                                    Bạn cần đăng nhập để đánh giá.
+
+                            {checkingReviewEligibility && (
+                                <p className="text-sm text-gray-500">
+                                    Checking review eligibility...
                                 </p>
+                            )}
+
+                            {!checkingReviewEligibility && !isAuthenticated && (
+                                <p className="text-sm text-gray-500">
+                                    Please log in to review.
+                                </p>
+                            )}
+
+                            {!checkingReviewEligibility && isAuthenticated && !canReview && (
+                                <p className="text-sm text-gray-500">
+                                    You can only review products from completed orders.
+                                </p>
+                            )}
+
+                            {!checkingReviewEligibility && isAuthenticated && canReview && (
+                                <>
+                                    <div className="flex items-center gap-2 mb-4">
+                                        {[...Array(5)].map((_, index) => {
+                                            const value = index + 1;
+                                            return (
+                                                <button
+                                                    key={value}
+                                                    type="button"
+                                                    onClick={() => setRating(value)}
+                                                    className="focus:outline-none"
+                                                    aria-label={`${value} stars`}
+                                                >
+                                                    <svg
+                                                        className={`w-6 h-6 ${value <= rating
+                                                            ? 'text-yellow-400 fill-current'
+                                                            : 'text-gray-300 fill-current'
+                                                            }`}
+                                                        viewBox="0 0 20 20"
+                                                    >
+                                                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                                                    </svg>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <textarea
+                                        value={comment}
+                                        onChange={(e) => setComment(e.target.value)}
+                                        placeholder="Chia sẻ cảm nhận về sản phẩm..."
+                                        rows={4}
+                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black/20"
+                                    />
+                                    <button
+                                        onClick={handleSubmitReview}
+                                        disabled={isSubmittingReview}
+                                        className="mt-4 w-full rounded-lg bg-black py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:bg-gray-400"
+                                    >
+                                        {isSubmittingReview ? 'Đang gửi...' : 'Gửi đánh giá'}
+                                    </button>
+                                </>
                             )}
                         </div>
                     </div>
@@ -408,3 +472,4 @@ export default function Detailcard() {
         </div>
     );
 }
+

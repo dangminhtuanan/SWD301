@@ -1,7 +1,9 @@
-﻿import mongoose from "mongoose";
+import mongoose from "mongoose";
 import Review from "../models/Review.js";
 import Product from "../models/Product.js";
 import User from "../models/User.js";
+import Order from "../models/Order.js";
+import OrderItem from "../models/OrderItem.js";
 
 const updateProductAverageRating = async (productId) => {
     const stats = await Review.aggregate([
@@ -17,6 +19,24 @@ const updateProductAverageRating = async (productId) => {
     await Product.findByIdAndUpdate(productId, { averageRating });
 };
 
+const userHasCompletedOrderForProduct = async (userId, productId) => {
+    const completedOrders = await Order.find({
+        user: userId,
+        status: "completed",
+    }).select("_id");
+
+    if (!completedOrders.length) {
+        return false;
+    }
+
+    const orderIds = completedOrders.map((order) => order._id);
+    const hasItem = await OrderItem.exists({
+        order: { $in: orderIds },
+        product: productId,
+    });
+
+    return Boolean(hasItem);
+};
 export const getAllReviews = async (req, res) => {
     try {
         const reviews = await Review.find()
@@ -91,6 +111,15 @@ export const createOrUpdateReview = async (req, res) => {
             return res.status(404).json({ message: "Product not found" });
         }
 
+        const canReview = await userHasCompletedOrderForProduct(
+            req.userId,
+            productId,
+        );
+        if (!canReview) {
+            return res.status(403).json({
+                message: "You can only review products from completed orders",
+            });
+        }
         const existing = await Review.findOne({
             user: req.userId,
             product: productId,
@@ -126,10 +155,22 @@ export const updateReview = async (req, res) => {
             return res.status(404).json({ message: "Review not found" });
         }
 
-        if (String(review.user) !== String(req.userId)) {
-            const requester = await User.findById(req.userId).select("role");
-            if (!requester || requester.role !== "admin") {
-                return res.status(403).json({ message: "Forbidden" });
+        const requester = await User.findById(req.userId).select("role");
+        const isAdmin = requester?.role === "admin";
+
+        if (String(review.user) !== String(req.userId) && !isAdmin) {
+            return res.status(403).json({ message: "Forbidden" });
+        }
+
+        if (!isAdmin) {
+            const canReview = await userHasCompletedOrderForProduct(
+                req.userId,
+                review.product,
+            );
+            if (!canReview) {
+                return res.status(403).json({
+                    message: "You can only review products from completed orders",
+                });
             }
         }
 
@@ -176,3 +217,4 @@ export const deleteReview = async (req, res) => {
         res.status(500).json({ message: "Server error while deleting review" });
     }
 };
+
