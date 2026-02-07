@@ -16,7 +16,7 @@ import Order from '../pages/order/Order';
 import Shop from '../pages/shop/shop';
 import Profile from '../pages/profile/Profile';
 import About from '../pages/about/About';
-import Contact from '../pages/contact/contact';
+import Contact from '../pages/contact/Contact';
 import VnpayReturn from '../pages/payment/VnpayReturn';
 import AdminDashboard from '../pages/admin/Dashboard';
 import ProductManagement from '../pages/admin/ProductManagement';
