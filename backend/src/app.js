@@ -80,6 +80,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Health check
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "backend",
+    uptime: process.uptime(),
+    time: new Date().toISOString(),
+  });
+});
+
 // Routes
 app.use("/api/users", authRoutes);
 // Back-compat: allow /api/register and /api/login (and /api/me) to hit user routes
